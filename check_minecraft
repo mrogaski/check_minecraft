@@ -23,9 +23,14 @@ class MCServer(nagiosplugin.Resource):
 
     def probe(self):
         _log.debug('using dummy data')
+        players = 60
+        limit = 64
+        utilization = players / limit * 100
         return [nagiosplugin.Metric('online', True, context='status'),
-                nagiosplugin.Metric('players', 10, min=0, max=64,
-                                    context='slots')]
+                nagiosplugin.Metric('players', players, min=0, max=limit,
+                                    context='slots'),
+                nagiosplugin.Metric('utilization', utilization,
+                                    context='utilization', uom='%')]
 
 
 def main():
@@ -35,11 +40,17 @@ def main():
     argp.add_argument('-v', '--verbose', action='count', default=0)
     argp.add_argument('-p', '--port', metavar='PORT', default=25565,
                       help='TCP port number of the server')
+    argp.add_argument('-w', '--warning', metavar='RANGE', default='75',
+                      help='return warning if load is outside RANGE')
+    argp.add_argument('-c', '--critical', metavar='RANGE', default='90',
+                      help='return critical if load is outside RANGE')
     args = argp.parse_args()
     check = nagiosplugin.Check(
         MCServer(args.address, args.port),
         nagiosplugin.Context('status'),
-        nagiosplugin.ScalarContext('slots'))
+        nagiosplugin.ScalarContext('slots'),
+        nagiosplugin.ScalarContext('utilization', args.warning,
+                                   args.critical))
     check.main(args.verbose)
 
 if __name__ == '__main__':
