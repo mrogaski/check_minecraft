@@ -11,9 +11,11 @@ __version__     = "0.1.0"
 
 import argparse
 import math
+import time
 import struct
 import socket
 import binascii
+import json
 import nagiosplugin
 import logging
 
@@ -83,32 +85,38 @@ class MCSession:
         return k
 
     def send(self, pid, data=b''):
-        pdu = self.encode_varint(pid) + data
-        pdu = self.encode_varint(len(pdu)) + pdu
-        _log.debug('Tx: %s' % binascii.hexlify(pdu))
+        payload = self.encode_varint(pid) + data
+        pdu = self.encode_varint(len(payload)) + payload
+        _log.debug('Tx %d byte(s); length: %d, id: 0x%02X' % (len(pdu), 
+                                                             len(payload),
+                                                             pid))
         self.sock.send(pdu)
 
     def recv(self):
-        buff = b''
+        buf = b''
+        tlen = 0
         plen = None
         for i in range(5):
             b = self.sock.recv(1)
             if b is not None:
-                _log.debug('Rx: %s', binascii.hexlify(b))
-                buff = buff + b
+                buf = buf + b
+                tlen = tlen + 1
             else:
                 raise RunTimeError('Connection read failure.')
             try:
-                plen = self.decode_varint(buff)
+                plen = self.decode_varint(buf)
             except ValueError:
                 pass
             else:
                 break
-        buff = b''
-        while plen - len(buff) > 0:
-            data = self.sock.recv(plen - len(buff))
-            _log.debug('Rx: %s' % binascii.hexlify(data[0:16]))
-            buff = buff + data 
+        payload = b''
+        while plen - len(payload) > 0:
+            buf = self.sock.recv(plen - len(payload))
+            payload = payload + buf
+        tlen = tlen + len(payload)
+        pid = (struct.unpack('B', payload[0:1]))[0]
+        _log.debug('Rx %d byte(s); length: %d, id: 0x%02X' % (tlen, plen, pid))
+        return (pid, payload[1:])
 
     def ping(self):
         # Handshake
@@ -119,10 +127,29 @@ class MCSession:
         self.send(0x00, msg)
 
         # Request
+        t = time.time()
         self.send(0x00)
 
         # Response
-        self.recv()
+        pid, res = self.recv()
+        t = time.time() - t
+        if pid != 0x00:
+            raise RunTimeError('unexpected server response: 0x%02X' % pid)
+
+        # Parse response
+        buf = b''
+        rlen = None
+        for i in range(5):
+            buf = buf + res[0:1]
+            res = res[1:]
+            try:
+                rlen = self.decode_varint(buf)
+            except ValueError:
+                pass
+            else:
+                break
+        data = json.loads(res.decode(encoding='utf-8'))
+        return (data['players']['online'], data['players']['max'], t)
 
     def close(self):
         self.sock.close()
@@ -138,17 +165,13 @@ class MCServer(nagiosplugin.Resource):
     def probe(self):
         session = MCSession(self.address, self.port)
         session.connect()
-        session.ping()
+        pcur, pmax, t = session.ping()
         session.close()
-
-        _log.debug('using dummy data')
-        players = 60
-        limit = 64
-        utilization = players / limit * 100
+        util = pcur / pmax * 100
         return [nagiosplugin.Metric('online', True, context='status'),
-                nagiosplugin.Metric('players', players, min=0, max=limit,
+                nagiosplugin.Metric('players', pcur, min=0, max=pmax,
                                     context='slots'),
-                nagiosplugin.Metric('utilization', utilization,
+                nagiosplugin.Metric('utilization', util,
                                     context='utilization', uom='%')]
 
 
