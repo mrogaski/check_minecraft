@@ -10,7 +10,10 @@ __license__     = "MIT"
 __version__     = "0.1.0"
 
 import argparse
+import math
 import struct
+import socket
+import binascii
 import nagiosplugin
 import logging
 
@@ -21,7 +24,29 @@ class MCSession:
         self.host = host
         self.addr = None
         self.port = port
-        self.seq = 0
+        self.sock = None
+
+    def connect(self):
+        addr_list = socket.getaddrinfo(self.host, self.port,
+                                       proto=socket.IPPROTO_TCP)
+        err = None
+        for af, socktype, proto, cn, sockaddr in addr_list:
+            s = None
+            try:
+                sock = socket.socket(af, socktype, proto)
+                sock.connect(sockaddr)
+                self.sock = sock
+                self.addr = sockaddr[0]
+            except OSError as e:
+                err = e
+                if sock:
+                    sock.close()
+            else:
+                break
+        else:
+            raise err
+        if not addr_list:
+            raise RunTimeError('cannot find address for %s' % host)
 
     @staticmethod
     def encode_varint(k):
@@ -57,6 +82,52 @@ class MCSession:
             k = k + (b << (7 * i))
         return k
 
+    def send(self, pid, data=b''):
+        pdu = self.encode_varint(pid) + data
+        pdu = self.encode_varint(len(pdu)) + pdu
+        _log.debug('Tx: %s' % binascii.hexlify(pdu))
+        self.sock.send(pdu)
+
+    def recv(self):
+        buff = b''
+        plen = None
+        for i in range(5):
+            b = self.sock.recv(1)
+            if b is not None:
+                _log.debug('Rx: %s', binascii.hexlify(b))
+                buff = buff + b
+            else:
+                raise RunTimeError('Connection read failure.')
+            try:
+                plen = self.decode_varint(buff)
+            except ValueError:
+                pass
+            else:
+                break
+        buff = b''
+        while plen - len(buff) > 0:
+            data = self.sock.recv(plen - len(buff))
+            _log.debug('Rx: %s' % binascii.hexlify(data[0:16]))
+            buff = buff + data 
+
+    def ping(self):
+        # Handshake
+        msg = struct.pack('B', 0x05)
+        msg = msg + self.encode_varint(len(self.addr)) + bytes(self.addr,
+                                                               'utf-8')
+        msg = msg + struct.pack('!HB', self.port, 0x01)
+        self.send(0x00, msg)
+
+        # Request
+        self.send(0x00)
+
+        # Response
+        self.recv()
+
+    def close(self):
+        self.sock.close()
+        self.sock = None
+        self.addr = None
             
 class MCServer(nagiosplugin.Resource):
     def __init__(self, address, port=25565):
@@ -65,6 +136,11 @@ class MCServer(nagiosplugin.Resource):
         self.version = None
 
     def probe(self):
+        session = MCSession(self.address, self.port)
+        session.connect()
+        session.ping()
+        session.close()
+
         _log.debug('using dummy data')
         players = 60
         limit = 64
