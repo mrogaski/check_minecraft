@@ -225,7 +225,7 @@ def main():
     argp.add_argument('-H', '--host', metavar='HOST', required=True,
                       help='hostname or IP address of the server')
     argp.add_argument('-p', '--port', metavar='PORT', default=25565,
-                      help='TCP port number of the server')
+                      type=int, help='TCP port number of the server')
     argp.add_argument('-v', '--verbose', action='count', default=0)
     argp.add_argument('-w', '--warning', metavar='RANGE', default='120',
                       help='return warning if RTD is outside RANGE')
