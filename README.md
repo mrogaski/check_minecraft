@@ -21,20 +21,21 @@ the monitor.
 ## Usage
 
 ```
-usage: check_minecraft [-h] [-v] -H HOST [-p PORT] [-w RANGE] [-c RANGE]
+usage: check_minecraft [-h] [-V] -H HOST [-p PORT] [-v] [-w RANGE] [-c RANGE]
 
-check_minecraft: A plugin for monitoring a Minecraft server running version
-1.7 or 1.8.
+check_minecraft: A plugin for monitoring a Minecraft server running version 1.7 or 1.8.
 
 optional arguments:
   -h, --help            show this help message and exit
-  -v, --verbose
+  -V, --version         show program's version number and exit
   -H HOST, --host HOST  hostname or IP address of the server
   -p PORT, --port PORT  TCP port number of the server
+  -v, --verbose
   -w RANGE, --warning RANGE
                         return warning if RTD is outside RANGE
   -c RANGE, --critical RANGE
                         return critical if RTD is outside RANGE
+
 ```
 
 
