@@ -27,6 +27,21 @@ import logging
 
 _log = logging.getLogger('nagiosplugin')
 
+class OnlineContext(nagiosplugin.ScalarContext):
+    def __init__(self, *args, fmt_metric='', **kwargs):
+        return super().__init__(*args, fmt_metric=fmt_metric, **kwargs)
+
+    def evaluate(self, metric, resource):
+        if metric.value:
+            return nagiosplugin.result.Result(nagiosplugin.state.Ok,
+                                              'server is available',
+                                              metric=metric)
+        else:
+            return nagiosplugin.result.Result(nagiosplugin.state.Critical,
+                                              'server is not available',
+                                              metric=metric)
+
+
 class MCSession:
     def __init__(self, host, port=25565):
         self.host = host
@@ -141,16 +156,16 @@ class MCSession:
         self.send(0x00)
         pid, res = self.recv()
         if pid != 0x00:
-            raise RunTimeError('unexpected server response: 0x%02X' % pid)
+            raise RunTimeError('unexpected response: 0x%02X' % pid)
 
         # Server Ping
         t = unix_time_ms()
         ptx = struct.pack('!q', int(t))
         self.send(0x01, ptx)
         pid, prx = self.recv()
-        delta = unix_time_ms() - t
+        delta = round(unix_time_ms() - t)
         if pid != 0x01:
-            raise RunTimeError('unexpected server response: 0x%02X' % pid)
+            raise RunTimeError('unexpected response: 0x%02X' % pid)
 
         # Parse status response
         buf = b''
@@ -171,9 +186,10 @@ class MCSession:
         return (delta, online, limit)
 
     def close(self):
-        self.sock.close()
-        self.sock = None
-        self.addr = None
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+            self.addr = None
             
 class MCServer(nagiosplugin.Resource):
     def __init__(self, host, port=25565):
@@ -182,15 +198,26 @@ class MCServer(nagiosplugin.Resource):
         self.version = None
 
     def probe(self):
+        online = None
+        rtd = None
+        pcur = None
+        pmax = None
         session = MCSession(self.host, self.port)
-        session.connect()
-        rtd, pcur, pmax = session.ping()
-        session.close()
-        return [nagiosplugin.Metric('online', True, context='status'),
-                nagiosplugin.Metric('rtd', rtd, context='rtd'),
-                nagiosplugin.Metric('players', pcur, min=0, max=pmax,
-                                    context='slots')]
+        try:
+            session.connect()
+        except ConnectionRefusedError:
+            yield nagiosplugin.Metric('online', False, context='status')
+            session.close()
+        else:
+            yield nagiosplugin.Metric('online', True, context='status')
+            rtd, pcur, pmax = session.ping()
+            session.close()
+            yield nagiosplugin.Metric('rtd', rtd, uom='ms', min=0,
+                                      max=None, context='rtd')
+            yield nagiosplugin.Metric('players', pcur, min=0, max=pmax,
+                                      context='slots')
 
+#@nagiosplugin.guarded
 def main():
     argp = argparse.ArgumentParser(description=__doc__)
     argp.add_argument('-v', '--verbose', action='count', default=0)
@@ -198,15 +225,16 @@ def main():
                       help='hostname or IP address of the server')
     argp.add_argument('-p', '--port', metavar='PORT', default=25565,
                       help='TCP port number of the server')
-    argp.add_argument('-w', '--warning', metavar='RANGE', default='75',
-                      help='return warning if load is outside RANGE')
-    argp.add_argument('-c', '--critical', metavar='RANGE', default='90',
-                      help='return critical if load is outside RANGE')
+    argp.add_argument('-w', '--warning', metavar='RANGE', default='120',
+                      help='return warning if RTD is outside RANGE')
+    argp.add_argument('-c', '--critical', metavar='RANGE', default='300',
+                      help='return critical if RTD is outside RANGE')
     args = argp.parse_args()
     check = nagiosplugin.Check(
         MCServer(args.host, args.port),
-        nagiosplugin.Context('status'),
-        nagiosplugin.ScalarContext('rtd'),
+        OnlineContext('status'),
+        nagiosplugin.ScalarContext('rtd', warning=args.warning,
+                                   critical=args.critical),
         nagiosplugin.ScalarContext('slots'))
     check.main(args.verbose)
 
